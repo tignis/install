@@ -6,19 +6,13 @@ import subprocess
 import sys
 import os
 import argparse
+import tempfile
+import shutil
 
 try:
     _input = raw_input
 except NameError:
     _input = input
-
-
-def org_repo_from_url(url):
-    chunks = url.replace(':', '/').split('/')
-    org, repo = chunks[-2], chunks[-1]
-    if repo.endswith('.git'):
-        repo = repo[:-4]
-    return (org, repo)
 
 
 def display_available_refs():
@@ -27,11 +21,14 @@ def display_available_refs():
     print("- Last 5 commits (unstable):")
     subprocess.check_call(['git', 'log', '--pretty=format:   %h %s (%cr)', '-n', '5'])
 
-    print("- Branches:")
-    subprocess.check_call(['git', 'for-each-ref', 'refs/heads', '--format=   %(objectname:short) %(refname:short)  (%(creatordate:relative))'])
+    print("- Local Branches:")
+    subprocess.check_call(['git', 'for-each-ref', 'refs/heads', '--sort=creatordate', '--format=   %(objectname:short) %(refname:short)  (%(creatordate:relative))'])
+
+    print("- Remote Branches:")
+    subprocess.check_call(['git', 'for-each-ref', 'refs/remotes', '--sort=creatordate', '--format=   %(objectname:short) %(refname:short)  (%(creatordate:relative))'])
 
     print("- Tagged releases:")
-    subprocess.check_call(['git', 'for-each-ref', 'refs/tags', '--format=   %(objectname:short) %(refname:short)  (%(creatordate:relative))'])
+    subprocess.check_call(['git', 'for-each-ref', 'refs/tags', '--sort=creatordate', '--format=   %(objectname:short) %(refname:short)  (%(creatordate:relative))'])
 
 
 def parse_args(args):
@@ -40,29 +37,38 @@ def parse_args(args):
         epilog="Leftover arguments passed to script."
     )
     p.add_argument("source_url", help="Git repo to clone. Required.")
-    p.add_argument("--directory", help="Clone to target directory, use if exists. Default: %s" % os.path.expanduser('~/workspace/$org/$repo/'), metavar="D")
+    p.add_argument("--directory", help="Clone to target directory, use existing clone if exists. Default: inside %s" % tempfile.gettempdir(), metavar="D")
     p.add_argument("--ref", help="Ref to 'git checkout'. Default: prompt")
     p.add_argument("--script", default="./install.py", help="Target script to run. Default: %(default)s", metavar="S")
     a, r = p.parse_known_args(args)
-    if not a.directory:
-        try:
-            org, repo = org_repo_from_url(a.source_url)
-            a.directory = "%s/%s/%s" % (os.path.expanduser('~/workspace'), org, repo)
-        except IndexError:
-            p.error("Cannot guess directory from url, specify --directory")
+
     return a, r, p
 
 
 def main(args):
     a, remaining, parser = parse_args(args)
-    print(a)
-    print(remaining)
 
-    if not os.path.exists(a.directory):
+    use_temporary_directory = a.directory is None
+    created_temp_directory = False
+    if use_temporary_directory:
+        try:
+            a.directory = tempfile.mkdtemp(prefix="git-clone-install")
+            created_temp_directory = True
+            return run(a, remaining, parser)
+        finally:
+            if created_temp_directory:
+                shutil.rmtree(a.directory)
+    else:
+        return run(a, remaining, parser)
+
+
+def run(a, remaining, parser):
+
+    if (not os.path.exists(a.directory)) or (not os.listdir(a.directory)):
         print("Cloning %s into %s" % (a.source_url, a.directory))
         subprocess.check_call(["git", "clone", a.source_url, a.directory])
     else:
-        print("Target directory", a.directory, "already exists")
+        print("Target directory %s already exists, assuming it's a git repository" % a.directory)
 
     os.chdir(a.directory)
 
